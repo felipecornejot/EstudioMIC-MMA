@@ -283,6 +283,7 @@ def _ensure_core_columns(df: pd.DataFrame) -> dict:
     col_mic_id = _find_col(df, ["mic_id", "MIC_ID", "id", "micid"])
     col_name = _find_col(df, ["mic_name_official", "MIC_NAME", "mic_name", "name", "nombre"])
     col_country = _find_col(df, ["country_name", "pais", "country"])
+    col_iso3 = _find_col(df, ["country_iso3", "iso3"])
     col_group = _find_col(df, ["country_group", "group"])
     col_type = _find_col(df, ["mic_type", "type"])
     col_owner_type = _find_col(df, ["mic_owner_type", "owner_type"])
@@ -296,6 +297,7 @@ def _ensure_core_columns(df: pd.DataFrame) -> dict:
         "mic_id": col_mic_id,
         "mic_name": col_name,
         "country": col_country,
+        "iso3": col_iso3,
         "group": col_group,
         "mic_type": col_type,
         "owner_type": col_owner_type,
@@ -306,6 +308,80 @@ def _ensure_core_columns(df: pd.DataFrame) -> dict:
         "dim_soc": col_dim_soc,
         "dim_eco": col_dim_eco,
     }
+
+def _dedupe_dataset(df: pd.DataFrame, cols: dict) -> tuple[pd.DataFrame, dict]:
+    """
+    Elimina duplicados del dataset para evitar conflictos en ranking/gráficos/fichas.
+    Llave:
+      - mic_id + country_iso3 (si existe iso3)
+      - si no, mic_id
+    Prioridad de retención:
+      1) last_verified_date más reciente
+      2) Score_total_adj más alto
+      3) start_year más reciente
+    """
+    info = {"removed": 0, "key": None, "had_dupes": False}
+
+    mic_id = cols.get("mic_id")
+    iso3 = cols.get("iso3")
+    if mic_id is None:
+        return df, info  # no se puede deduplicar sin mic_id
+
+    key_cols = [mic_id]
+    if iso3 and iso3 in df.columns:
+        key_cols = [mic_id, iso3]
+    info["key"] = "+".join(key_cols)
+
+    # Si no hay duplicados, salir
+    dup_mask = df.duplicated(subset=key_cols, keep=False)
+    if not dup_mask.any():
+        return df, info
+
+    info["had_dupes"] = True
+    before = len(df)
+
+    # columnas para desempate (si existen)
+    date_col = _find_col(df, ["last_verified_date", "last_verified", "verified_date"])
+    score_col = _find_col(df, ["Score_total_adj", "score_total_adj"])
+    year_col = _find_col(df, ["start_year", "year_start"])
+
+    dfx = df.copy()
+
+    # parse fecha (si existe)
+    if date_col and date_col in dfx.columns:
+        dfx["_lv_dt"] = pd.to_datetime(dfx[date_col], errors="coerce", utc=False)
+    else:
+        dfx["_lv_dt"] = pd.NaT
+
+    # score (si existe)
+    if score_col and score_col in dfx.columns:
+        dfx["_score_num"] = pd.to_numeric(dfx[score_col], errors="coerce")
+    else:
+        dfx["_score_num"] = np.nan
+
+    # año (si existe)
+    if year_col and year_col in dfx.columns:
+        dfx["_start_year_num"] = pd.to_numeric(dfx[year_col], errors="coerce")
+    else:
+        dfx["_start_year_num"] = np.nan
+
+    # ordenar por prioridad: fecha desc, score desc, año desc
+    dfx = dfx.sort_values(
+        by=["_lv_dt", "_score_num", "_start_year_num"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+
+    # quedarnos con el "mejor" por llave
+    dfx = dfx.drop_duplicates(subset=key_cols, keep="first").copy()
+
+    # limpiar auxiliares
+    for c in ["_lv_dt", "_score_num", "_start_year_num"]:
+        if c in dfx.columns:
+            dfx.drop(columns=[c], inplace=True)
+
+    info["removed"] = before - len(dfx)
+    return dfx, info
 
 def _render_membrete_block():
     membrete_path_candidates = [
@@ -342,6 +418,15 @@ if df_raw is None or df_raw.empty:
 df_raw.columns = [str(c).strip() for c in df_raw.columns]
 df = _compute_ranking_fallback(df_raw)
 cols = _ensure_core_columns(df)
+
+# ====== DEDUPE (corrección solicitada) ======
+df, dedupe_info = _dedupe_dataset(df, cols)
+if dedupe_info["had_dupes"]:
+    st.sidebar.warning(
+        f"Se detectaron duplicados y fueron removidos en visualización: "
+        f"{dedupe_info['removed']} filas (llave: {dedupe_info['key']})."
+    )
+# ===========================================
 
 # =========================
 # Header
@@ -455,6 +540,7 @@ with tab_rank:
         label = label_base + " · " + df_plot[cols["mic_id"]].astype(str)
         df_plot["label_wrapped"] = label.apply(lambda x: _wrap_label(x, width=28, max_lines=3))
 
+        # Asegurar unicidad visual (evita colisiones)
         if df_plot["label_wrapped"].duplicated().any():
             counts = {}
             new = []
@@ -482,7 +568,6 @@ with tab_rank:
                 ],
             )
 
-            # Color fijo para ranking (barra principal)
             bars = base.mark_bar(color=TXT_BLUE)
 
             if show_values:
@@ -499,9 +584,7 @@ with tab_rank:
             else:
                 chart = bars.properties(height=450).configure_view(strokeOpacity=0).configure_axis(gridColor="#E0E0E0")
 
-            # Forzar fondo blanco en el chart
             chart = chart.configure(background="#FFFFFF")
-
             st.altair_chart(chart, use_container_width=True)
 
         st.markdown("**Tabla ranking (subconjunto filtrado)**")
@@ -560,7 +643,6 @@ with tab_metrics:
                 "Cobertura": [env_rate, soc_rate, eco_rate]
             }).dropna()
 
-            # Colores principales para triple dimensión (orden solicitado)
             color_scale = alt.Scale(domain=["Ambiental", "Social", "Económica"], range=CHART_PRIMARY)
 
             chart = alt.Chart(dplot).mark_bar().encode(
