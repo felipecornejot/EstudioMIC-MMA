@@ -33,67 +33,131 @@ DEFAULT_DATASET_XLSX = "P9_Dataset_Trazable_MIC.xlsx"
 MEMBRETE_FILENAME = "membrete (1).png"  # debe estar junto a app.py o en el mismo repo
 
 # =========================
-# Estilo (fondo blanco + cards)
+# Paleta (fija en light/dark)
+# =========================
+# Texto
+TXT_NAVY = "#005EA8"
+TXT_LIGHT = "#F2F2F2"
+TXT_DARK = "#4A4A4A"
+TXT_GREEN = "#7CB342"
+TXT_ORANGE = "#EF6C00"
+TXT_BLUE = "#039BE5"
+TXT_SKY = "#E3F2FD"
+TXT_CREAM = "#FFF8E1"
+TXT_RED = "#C62828"
+
+# Gráficos (principales + apoyo)
+CHART_PRIMARY = [TXT_GREEN, TXT_ORANGE, TXT_BLUE]  # orden solicitado
+CHART_SUPPORT = [TXT_NAVY, TXT_DARK, TXT_RED, TXT_SKY, TXT_CREAM, TXT_LIGHT]
+CHART_PALETTE = CHART_PRIMARY + CHART_SUPPORT
+
+# =========================
+# Estilo (fondo blanco + cards + colores fijos)
 # =========================
 st.markdown(
-    """
+    f"""
 <style>
+/* =======================
+   Forzar modo CLARO siempre
+   (se vea igual en dark/light)
+   ======================= */
+:root {{
+    color-scheme: only light;
+}}
+
 /* Fondo global blanco */
-html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"]{
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
     background: #ffffff !important;
-}
-[data-testid="stHeader"] { background: rgba(255,255,255,0.9) !important; }
-[data-testid="stSidebar"] { background: #ffffff !important; }
+    color: {TXT_DARK} !important;
+}}
+[data-testid="stHeader"] {{
+    background: rgba(255,255,255,0.92) !important;
+}}
+[data-testid="stSidebar"] {{
+    background: #ffffff !important;
+    color: {TXT_DARK} !important;
+}}
+
+/* Textos base (evita que Streamlit herede colores del tema dark) */
+* {{
+    color: {TXT_DARK};
+}}
+a, a * {{
+    color: {TXT_BLUE} !important;
+}}
+small, .stCaption, [data-testid="stMarkdownContainer"] p {{
+    color: {TXT_DARK} !important;
+}}
+
+/* Inputs y widgets */
+div[data-baseweb="select"] * {{
+    color: {TXT_DARK} !important;
+}}
+input, textarea {{
+    color: {TXT_DARK} !important;
+}}
+[data-testid="stMetricValue"], [data-testid="stMetricLabel"] {{
+    color: {TXT_DARK} !important;
+}}
 
 /* Tipografía y espaciados */
-.main-title{
+.main-title {{
     font-size: 34px;
     font-weight: 800;
     line-height: 1.1;
     margin: 0 0 6px 0;
-}
-.main-subtitle{
+    color: {TXT_NAVY} !important;
+}}
+.main-subtitle {{
     font-size: 14px;
     font-weight: 500;
-    opacity: 0.75;
+    opacity: 0.90;
     margin: 0 0 16px 0;
-}
+    color: {TXT_DARK} !important;
+}}
 
 /* Tarjetas */
-.card{
+.card {{
     border: 1px solid rgba(0,0,0,0.08);
     border-radius: 14px;
     padding: 14px 16px;
     background: #fff;
     box-shadow: 0 10px 30px rgba(0,0,0,0.06);
-}
-.card-title{
+}}
+.card-title {{
     font-size: 13px;
     font-weight: 700;
-    opacity: 0.72;
+    opacity: 0.95;
     margin-bottom: 6px;
-}
-.small-note{
+    color: {TXT_NAVY} !important;
+}}
+.small-note {{
     font-size: 12px;
-    opacity: 0.7;
-}
+    opacity: 0.90;
+    color: {TXT_DARK} !important;
+}}
 
 /* Bloque membrete con sombra */
-.membrete-wrap{
+.membrete-wrap {{
     display: inline-block;
     padding: 10px 12px;
     border-radius: 14px;
     background: #fff;
     border: 1px solid rgba(0,0,0,0.08);
     box-shadow: 0 10px 30px rgba(0,0,0,0.10);
-}
+}}
 
 /* Separadores suaves */
-.hr-soft{
+.hr-soft {{
     border: 0;
     border-top: 1px solid rgba(0,0,0,0.08);
     margin: 10px 0 16px 0;
-}
+}}
+
+/* Alertas (colores institucionales) */
+div[data-testid="stAlert"] * {{
+    color: {TXT_DARK} !important;
+}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -252,7 +316,6 @@ def _render_membrete_block():
     ]
     membrete_path = next((p for p in membrete_path_candidates if os.path.exists(p)), None)
 
-    # alineado al cuerpo, abajo-izquierda, como bloque independiente con sombra
     left, _mid, _right = st.columns([1.2, 0.8, 2.0])
     with left:
         if membrete_path:
@@ -371,7 +434,6 @@ with tab_rank:
         )
         st.dataframe(df_f.head(50), use_container_width=True)
         st.write("")
-        # membrete AL FINAL del ranking, incluso si no hubo gráfico
         _render_membrete_block()
     else:
         c1, c2, c3 = st.columns([1, 1, 2])
@@ -389,12 +451,10 @@ with tab_rank:
         ascending = (sort_dir == "Ascendente")
         df_plot = df_plot.sort_values(score_col, ascending=ascending).head(top_n)
 
-        # etiqueta única + wrap
         label_base = df_plot[cols["mic_name"]].astype(str)
         label = label_base + " · " + df_plot[cols["mic_id"]].astype(str)
         df_plot["label_wrapped"] = label.apply(lambda x: _wrap_label(x, width=28, max_lines=3))
 
-        # evitar duplicados por cualquier motivo
         if df_plot["label_wrapped"].duplicated().any():
             counts = {}
             new = []
@@ -411,9 +471,9 @@ with tab_rank:
                 y=alt.Y(
                     "label_wrapped:N",
                     sort=None,
-                    axis=alt.Axis(labelFontSize=9, title=None),  # MÁS pequeño
+                    axis=alt.Axis(labelFontSize=9, title=None, labelColor=TXT_DARK),
                 ),
-                x=alt.X(f"{score_col}:Q", title="Score (ponderado)"),
+                x=alt.X(f"{score_col}:Q", title="Score (ponderado)", axis=alt.Axis(labelColor=TXT_DARK, titleColor=TXT_DARK)),
                 tooltip=[
                     alt.Tooltip(cols["mic_id"] + ":N", title="MIC ID"),
                     alt.Tooltip(cols["mic_name"] + ":N", title="Nombre"),
@@ -422,19 +482,25 @@ with tab_rank:
                 ],
             )
 
-            bars = base.mark_bar()
+            # Color fijo para ranking (barra principal)
+            bars = base.mark_bar(color=TXT_BLUE)
+
             if show_values:
                 text = base.mark_text(
                     align="left",
                     baseline="middle",
                     dx=4,
-                    fontSize=9,  # MÁS pequeño
+                    fontSize=9,
+                    color=TXT_DARK,
                 ).encode(
                     text=alt.Text(f"{score_col}:Q", format=".2f")
                 )
-                chart = (bars + text).properties(height=450)
+                chart = (bars + text).properties(height=450).configure_view(strokeOpacity=0).configure_axis(gridColor="#E0E0E0")
             else:
-                chart = bars.properties(height=450)
+                chart = bars.properties(height=450).configure_view(strokeOpacity=0).configure_axis(gridColor="#E0E0E0")
+
+            # Forzar fondo blanco en el chart
+            chart = chart.configure(background="#FFFFFF")
 
             st.altair_chart(chart, use_container_width=True)
 
@@ -445,7 +511,6 @@ with tab_rank:
             hide_index=True,
         )
 
-        # === MEMBRETE AQUÍ: al final, DESPUÉS de la tabla de ranking ===
         st.write("")
         _render_membrete_block()
 
@@ -494,11 +559,17 @@ with tab_metrics:
                 "Dimensión": ["Ambiental", "Social", "Económica"],
                 "Cobertura": [env_rate, soc_rate, eco_rate]
             }).dropna()
+
+            # Colores principales para triple dimensión (orden solicitado)
+            color_scale = alt.Scale(domain=["Ambiental", "Social", "Económica"], range=CHART_PRIMARY)
+
             chart = alt.Chart(dplot).mark_bar().encode(
-                x=alt.X("Dimensión:N", title=None),
-                y=alt.Y("Cobertura:Q", title="Proporción (0–1)", axis=alt.Axis(format="%")),
+                x=alt.X("Dimensión:N", title=None, axis=alt.Axis(labelColor=TXT_DARK)),
+                y=alt.Y("Cobertura:Q", title="Proporción (0–1)", axis=alt.Axis(format="%", labelColor=TXT_DARK, titleColor=TXT_DARK)),
+                color=alt.Color("Dimensión:N", scale=color_scale, legend=None),
                 tooltip=[alt.Tooltip("Cobertura:Q", format=".2%")]
-            ).properties(height=260)
+            ).properties(height=260).configure(background="#FFFFFF").configure_view(strokeOpacity=0).configure_axis(gridColor="#E0E0E0")
+
             st.altair_chart(chart, use_container_width=True)
 
     st.write("")
@@ -587,4 +658,3 @@ with tab_explorer:
 # =========================
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Última carga: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
