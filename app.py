@@ -1,9 +1,10 @@
-# app.py — Visualizador P9 (MMA-ready) | FIXED (ranking + dims + ficha + fondo blanco + membrete)
+# app.py — Visualizador P9 (MMA-ready) | FIXED v2 (membrete en cuerpo + ranking ordenable + dims si/no)
 from __future__ import annotations
 
 import base64
 import io
 import os
+import textwrap
 from typing import Optional
 
 import numpy as np
@@ -22,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Colores (mantener acento menta/cian; NO usar naranja en textos)
+# Colores (acento menta/cian; NO usar naranja en textos)
 ACCENT = "#00BFA6"
 TEXT = "#0F172A"
 MUTED = "#475569"
@@ -32,7 +33,7 @@ BLUE_SUB = "#6B8FBF"
 
 
 # -----------------------------
-# CSS — Fondo BLANCO + cards + footer membrete
+# CSS — Fondo BLANCO + cards
 # -----------------------------
 st.markdown(
     f"""
@@ -107,15 +108,14 @@ section[data-testid="stSidebar"] {{
 .gov-title {{ font-weight: 700; font-size: 20px; margin: 0; }}
 .gov-sub {{ font-weight: 500; font-size: 16px; color: {MUTED}; margin: 4px 0 0 0; }}
 
-/* Footer membrete fijo */
-.membrete-fixed {{
-  position: fixed;
-  left: 14px;
-  bottom: 14px;
-  z-index: 999999;
-  opacity: 0.98;
+/* Membrete en cuerpo (NO fixed) */
+.membrete-body {{
+  margin-top: 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
 }}
-.membrete-fixed img {{
+.membrete-body img {{
   height: 44px;
   border-radius: 10px;
   box-shadow: 0 10px 25px rgba(2, 6, 23, 0.18);
@@ -155,6 +155,54 @@ def coerce_num(df: pd.DataFrame, cols: list[str]) -> None:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
 
+def to_bool01(series: pd.Series) -> pd.Series:
+    """
+    Convierte SI/NO (y variantes) a 1/0 robusto.
+    Acepta: si, sí, yes, true, 1, y / no, false, 0, n, etc.
+    """
+    if series is None:
+        return pd.Series([], dtype="float")
+    s = series.copy()
+
+    # Si ya es numérico, úsalo
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_numeric(s, errors="coerce").fillna(0).clip(lower=0, upper=1)
+
+    # Normaliza strings
+    s = s.astype(str).str.strip().str.lower()
+
+    yes = {"si", "sí", "s", "yes", "y", "true", "1", "ok", "x"}
+    no = {"no", "n", "false", "0", "na", "nd", ""}
+
+    out = pd.Series(np.nan, index=s.index, dtype="float")
+    out[s.isin(yes)] = 1.0
+    out[s.isin(no)] = 0.0
+
+    # Intenta convertir cualquier otra cosa a numérico (por si viene "1.0")
+    fallback = pd.to_numeric(s, errors="coerce")
+    out = out.fillna(fallback)
+
+    return out.fillna(0).clip(lower=0, upper=1)
+
+
+def wrap_label(text: str, width: int = 34, max_lines: int = 3) -> str:
+    """
+    Envuelve texto a 2–3 líneas con <br> para Plotly.
+    """
+    t = " ".join(str(text).split())
+    lines = textwrap.wrap(t, width=width)
+    lines = lines[:max_lines]
+    if len(lines) < 1:
+        return t
+    # si se truncó, agrega "…"
+    if len(textwrap.wrap(t, width=width)) > max_lines:
+        last = lines[-1]
+        if len(last) > 1:
+            last = last[:-1] + "…"
+        lines[-1] = last
+    return "<br>".join(lines)
+
+
 @st.cache_data(show_spinner=False)
 def load_dataset(file_bytes: Optional[bytes], filename: Optional[str]) -> pd.DataFrame:
     if file_bytes and filename:
@@ -164,7 +212,6 @@ def load_dataset(file_bytes: Optional[bytes], filename: Optional[str]) -> pd.Dat
             return pd.read_excel(io.BytesIO(file_bytes))
         raise ValueError("Formato no soportado. Use .csv o .xlsx")
 
-    # fallback local (mismo directorio)
     if os.path.exists("P9_Dataset_Trazable_MIC.csv"):
         return pd.read_csv("P9_Dataset_Trazable_MIC.csv", encoding="utf-8")
     if os.path.exists("P9_Dataset_Trazable_MIC.xlsx"):
@@ -173,47 +220,29 @@ def load_dataset(file_bytes: Optional[bytes], filename: Optional[str]) -> pd.Dat
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normaliza nombres: strip; y crea ALIAS de columnas "esperadas" por el visualizador,
-    usando tus columnas reales.
-    """
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
 
-    # Aliases principales (NO cambia la fuente; solo agrega columnas espejo para robustez)
-    # ID / Name
+    # Aliases
     if "mic_id" in df.columns and "MIC_ID" not in df.columns:
         df["MIC_ID"] = df["mic_id"]
     if "mic_name_official" in df.columns and "MIC_NAME" not in df.columns:
         df["MIC_NAME"] = df["mic_name_official"]
 
-    # Score / Rank
     if "Score_total_adj" in df.columns and "score" not in df.columns:
         df["score"] = df["Score_total_adj"]
     if "Rank_global" in df.columns and "rank" not in df.columns:
         df["rank"] = df["Rank_global"]
-
-    # Triple dimensión (algunas versiones antiguas esperaban DIMM_*)
-    if "dim_env" in df.columns and "DIMM_ENV" not in df.columns:
-        df["DIMM_ENV"] = df["dim_env"]
-    if "dim_soc" in df.columns and "DIMM_SOC" not in df.columns:
-        df["DIMM_SOC"] = df["dim_soc"]
-    if "dim_eco" in df.columns and "DIMM_ECO" not in df.columns:
-        df["DIMM_ECO"] = df["dim_eco"]
 
     return df
 
 
 def ensure_rank_score(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Construye score/rank SI faltan o vienen vacíos, sin romper el dashboard.
-    Prioridad:
-      score: Score_total_adj -> Score_total_min -> sum(Ci*W_Ci)
-      rank: Rank_global -> rank derivado por score desc
+    Construye score/rank SI faltan o vienen vacíos.
     """
     df = df.copy()
 
-    # Score
     if "Score_total_adj" not in df.columns:
         df["Score_total_adj"] = np.nan
     if df["Score_total_adj"].isna().all():
@@ -229,24 +258,14 @@ def ensure_rank_score(df: pd.DataFrame) -> pd.DataFrame:
         temp_w = df[wcols].apply(pd.to_numeric, errors="coerce")
         df["Score_total_adj"] = (temp_c * temp_w).sum(axis=1)
 
-    # Rank
     if "Rank_global" not in df.columns:
         df["Rank_global"] = np.nan
 
     if df["Rank_global"].isna().all() and df["Score_total_adj"].notna().any():
         df["Rank_global"] = df["Score_total_adj"].rank(method="dense", ascending=False)
 
-    # Actualiza aliases por robustez
-    if "score" in df.columns:
-        df["score"] = pd.to_numeric(df["Score_total_adj"], errors="coerce")
-    else:
-        df["score"] = pd.to_numeric(df["Score_total_adj"], errors="coerce")
-
-    if "rank" in df.columns:
-        df["rank"] = pd.to_numeric(df["Rank_global"], errors="coerce")
-    else:
-        df["rank"] = pd.to_numeric(df["Rank_global"], errors="coerce")
-
+    df["score"] = pd.to_numeric(df["Score_total_adj"], errors="coerce")
+    df["rank"] = pd.to_numeric(df["Rank_global"], errors="coerce")
     return df
 
 
@@ -275,7 +294,7 @@ except Exception as e:
 
 df = normalize_columns(df)
 
-# Numéricos relevantes (según tu esquema real)
+# Numéricos relevantes
 coerce_num(
     df,
     [
@@ -284,9 +303,6 @@ coerce_num(
         "Rank_global",
         "Rank_country",
         "ipc_coverage_count",
-        "dim_env",
-        "dim_soc",
-        "dim_eco",
         "last_update_year",
         "longevity_years",
     ],
@@ -295,21 +311,7 @@ coerce_num(
 df = ensure_rank_score(df)
 
 # -----------------------------
-# Footer membrete (fijo)
-# -----------------------------
-membrete_b64 = b64_image("membrete (1).png")
-if membrete_b64:
-    st.markdown(
-        f"""
-<div class="membrete-fixed">
-  <img src="data:image/png;base64,{membrete_b64}" alt="Membrete Gobierno de Chile" />
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-# -----------------------------
-# Header (formato de referencia)
+# Header
 # -----------------------------
 st.markdown(
     """
@@ -353,6 +355,7 @@ if "Score_total_adj" in df.columns and df["Score_total_adj"].notna().any():
     lo = float(np.nanmin(df["Score_total_adj"]))
     hi = float(np.nanmax(df["Score_total_adj"]))
     score_minmax = st.sidebar.slider("Rango de score (MCA)", lo, hi, (lo, hi))
+
 
 # Apply filters
 dff = df.copy()
@@ -406,50 +409,60 @@ c1, c2 = st.columns([0.58, 0.42], gap="large")
 with c1:
     st.markdown("### Ranking MCA (Top N)")
 
-    # Condición REAL (con tus columnas)
+    sort_mode = st.radio(
+        "Orden de barras",
+        ["Descendente (mejor score arriba)", "Ascendente (mejor score abajo)"],
+        horizontal=True,
+        index=0,
+    )
+    asc = sort_mode.startswith("Ascendente")
+
     can_rank = (
-        ("mic_id" in dff.columns) and
-        ("mic_name_official" in dff.columns) and
-        dff["mic_id"].notna().any() and
-        dff["mic_name_official"].notna().any() and
-        dff["Score_total_adj"].notna().any()
+        ("mic_id" in dff.columns)
+        and ("mic_name_official" in dff.columns)
+        and dff["mic_id"].notna().any()
+        and dff["mic_name_official"].notna().any()
+        and dff["Score_total_adj"].notna().any()
     )
 
     if can_rank:
-        top = (
-            dff.dropna(subset=["Score_total_adj"])
-            .copy()
+        top = dff.dropna(subset=["Score_total_adj"]).copy()
+
+        # orden base por score (robusto y coherente para el gráfico)
+        top = top.sort_values(by="Score_total_adj", ascending=asc).head(top_n)
+
+        # labels envueltas (2–3 líneas)
+        top["label_wrapped"] = top.apply(
+            lambda r: wrap_label(f"{r['mic_id']} — {r['mic_name_official']}", width=38, max_lines=3),
+            axis=1,
         )
 
-        # Orden robusto: si Rank_global existe, úsalo; si no, ordena por score desc
-        if "Rank_global" in top.columns and top["Rank_global"].notna().any():
-            top = top.sort_values(by=["Rank_global", "Score_total_adj"], ascending=[True, False])
-        else:
-            top = top.sort_values(by=["Score_total_adj"], ascending=[False])
-
-        top = top.head(top_n)
-
-        top["label"] = top["mic_id"].astype(str) + " — " + top["mic_name_official"].astype(str)
+        # para que plotly respete el orden
+        top["label_order"] = pd.Categorical(top["label_wrapped"], categories=top["label_wrapped"].tolist(), ordered=True)
 
         fig = px.bar(
-            top.sort_values("Score_total_adj", ascending=True),
+            top,
             x="Score_total_adj",
-            y="label",
+            y="label_order",
             orientation="h",
             hover_data=[c for c in ["country_name", "country_group", "ipc_category_primary_label"] if c in top.columns],
-            title="",
+            text=top["Score_total_adj"].round(2),
         )
+
+        fig.update_traces(textposition="inside", insidetextanchor="start", cliponaxis=False)
+
         fig.update_layout(
-            height=540,
-            margin=dict(l=10, r=10, t=20, b=10),
+            height=640,
+            margin=dict(l=10, r=10, t=10, b=10),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis_title="Score MCA (ponderado)",
             yaxis_title="",
+            yaxis=dict(tickfont=dict(size=12)),
         )
+
         st.plotly_chart(fig, use_container_width=True)
     else:
-        # No “error rojo”: diagnóstico claro y accionable
         missing = []
         for need in ["mic_id", "mic_name_official", "Score_total_adj"]:
             if need not in dff.columns or not dff[need].notna().any():
@@ -468,7 +481,7 @@ with c2:
             s = dff["obligation_level"].value_counts(dropna=True).reset_index()
             s.columns = ["obligation_level", "count"]
             fig = px.pie(s, names="obligation_level", values="count", title="")
-            fig.update_layout(height=340, margin=dict(l=10, r=10, t=20, b=10), paper_bgcolor="rgba(0,0,0,0)")
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No se identificó 'obligation_level' con datos en el subconjunto filtrado.")
@@ -480,7 +493,7 @@ with c2:
             fig = px.bar(s, x="enforcement_level", y="count", title="")
             fig.update_layout(
                 height=340,
-                margin=dict(l=10, r=10, t=20, b=10),
+                margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor="rgba(0,0,0,0)",
                 xaxis_title="",
                 yaxis_title="Nº MIC",
@@ -494,7 +507,7 @@ with c2:
             fig = px.histogram(dff, x="ipc_coverage_count", nbins=10, title="")
             fig.update_layout(
                 height=340,
-                margin=dict(l=10, r=10, t=20, b=10),
+                margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor="rgba(0,0,0,0)",
                 xaxis_title="Nº de categorías IPC cubiertas",
                 yaxis_title="Nº MIC",
@@ -504,18 +517,18 @@ with c2:
             st.info("No se identificó 'ipc_coverage_count' con datos en el subconjunto filtrado.")
 
     with tabs[3]:
-        # Usa tus columnas reales dim_env/dim_soc/dim_eco (y tolera 0/1 o texto)
+        # FIX: dim_env/dim_soc/dim_eco vienen como SI/NO => convertir a 1/0 y contar >=1
         dims = []
         for col, label in [("dim_env", "Ambiental"), ("dim_soc", "Social"), ("dim_eco", "Económica")]:
             if col in dff.columns and dff[col].notna().any():
-                series = pd.to_numeric(dff[col], errors="coerce")
-                dims.append((label, int((series >= 1).sum())))
+                b = to_bool01(dff[col])
+                dims.append((label, int((b >= 1).sum())))
         if dims:
             dd = pd.DataFrame(dims, columns=["dimensión", "MIC_con_cobertura"])
             fig = px.bar(dd, x="dimensión", y="MIC_con_cobertura", title="")
             fig.update_layout(
                 height=340,
-                margin=dict(l=10, r=10, t=20, b=10),
+                margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor="rgba(0,0,0,0)",
                 xaxis_title="",
                 yaxis_title="Nº MIC",
@@ -565,7 +578,6 @@ with left:
     )
 
 with right:
-    # Ficha: requiere mic_id + mic_name_official con datos
     can_profile = (
         ("mic_id" in dff.columns) and ("mic_name_official" in dff.columns) and
         dff["mic_id"].notna().any() and dff["mic_name_official"].notna().any()
@@ -602,13 +614,18 @@ with right:
         line("Transparencia", row.get("transparency_level"))
         line("Soporte comparabilidad", row.get("comparability_support"))
 
+        # Triple dimensión — mostrar SI/NO normalizado
+        env = int(to_bool01(pd.Series([row.get("dim_env")]))[0]) if "dim_env" in dff.columns else 0
+        soc = int(to_bool01(pd.Series([row.get("dim_soc")]))[0]) if "dim_soc" in dff.columns else 0
+        eco = int(to_bool01(pd.Series([row.get("dim_eco")]))[0]) if "dim_eco" in dff.columns else 0
+
         st.markdown(
             "**Triple dimensión:** "
             + " | ".join(
                 [
-                    f"Ambiental={safe_text(row.get('dim_env'))}",
-                    f"Social={safe_text(row.get('dim_soc'))}",
-                    f"Económica={safe_text(row.get('dim_eco'))}",
+                    f"Ambiental={'sí' if env==1 else 'no'}",
+                    f"Social={'sí' if soc==1 else 'no'}",
+                    f"Económica={'sí' if eco==1 else 'no'}",
                 ]
             )
         )
@@ -641,7 +658,20 @@ with right:
         )
 
 st.markdown("---")
+
+# Footer texto + membrete en el CUERPO (no fixed)
 st.markdown(
     "<div class='small'>P9 consolida variables base (P2/P5), resultados MCA (P8) y metadatos de trazabilidad para auditoría y dashboard.</div>",
     unsafe_allow_html=True,
 )
+
+membrete_b64 = b64_image("membrete (1).png")
+if membrete_b64:
+    st.markdown(
+        f"""
+<div class="membrete-body">
+  <img src="data:image/png;base64,{membrete_b64}" alt="Membrete Gobierno de Chile" />
+</div>
+""",
+        unsafe_allow_html=True,
+    )
